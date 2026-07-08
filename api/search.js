@@ -1,4 +1,128 @@
-// api/search.js - خادم البحث على Vercel
+// api/search.js - خادم البحث على Vercel مع نظام ارتفاع متعدد الطبقات (بدون بيانات يدوية)
+
+// ===== جلب الارتفاع من Open-Elevation API (الطبقة الأولى) =====
+async function getElevationFromOpenElevation(lat, lng) {
+    try {
+        const url = `https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lng}`;
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'PrayerTimesApp/1.0'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (data.results && data.results.length > 0) {
+            const elevation = data.results[0].elevation;
+            if (elevation !== null && elevation !== undefined) {
+                return Math.round(elevation);
+            }
+        }
+        return null;
+    } catch (error) {
+        console.warn('⚠️ فشل Open-Elevation:', error.message);
+        return null;
+    }
+}
+
+// ===== جلب الارتفاع من OpenTopoData API (الطبقة الثانية - بديل) =====
+async function getElevationFromOpenTopo(lat, lng) {
+    try {
+        const url = `https://api.opentopodata.org/v1/srtm30m?locations=${lat},${lng}`;
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'PrayerTimesApp/1.0'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (data.results && data.results.length > 0) {
+            const elevation = data.results[0].elevation;
+            if (elevation !== null && elevation !== undefined) {
+                return Math.round(elevation);
+            }
+        }
+        return null;
+    } catch (error) {
+        console.warn('⚠️ فشل OpenTopoData:', error.message);
+        return null;
+    }
+}
+
+// ===== جلب الارتفاع من Open-Meteo API (الطبقة الثالثة - بديل إضافي) =====
+async function getElevationFromOpenMeteo(lat, lng) {
+    try {
+        const url = `https://geocoding-api.open-meteo.com/v1/search?latitude=${lat}&longitude=${lng}&count=1`;
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'PrayerTimesApp/1.0'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (data.results && data.results.length > 0) {
+            const elevation = data.results[0].elevation;
+            if (elevation !== null && elevation !== undefined) {
+                return Math.round(elevation);
+            }
+        }
+        return null;
+    } catch (error) {
+        console.warn('⚠️ فشل Open-Meteo:', error.message);
+        return null;
+    }
+}
+
+// ===== جلب الارتفاع من جميع المصادر (نظام متعدد الطبقات) =====
+async function getElevation(lat, lng) {
+    // ===== الطبقة 1: Open-Elevation API =====
+    try {
+        const elevation = await getElevationFromOpenElevation(lat, lng);
+        if (elevation !== null && elevation > 0) {
+            console.log(`✅ الارتفاع من Open-Elevation: ${elevation}م`);
+            return elevation;
+        }
+    } catch (error) {
+        console.warn('⚠️ فشل Open-Elevation، جاري الانتقال للطبقة التالية');
+    }
+    
+    // ===== الطبقة 2: OpenTopoData API =====
+    try {
+        const elevation = await getElevationFromOpenTopo(lat, lng);
+        if (elevation !== null && elevation > 0) {
+            console.log(`✅ الارتفاع من OpenTopoData: ${elevation}م`);
+            return elevation;
+        }
+    } catch (error) {
+        console.warn('⚠️ فشل OpenTopoData، جاري الانتقال للطبقة التالية');
+    }
+    
+    // ===== الطبقة 3: Open-Meteo API =====
+    try {
+        const elevation = await getElevationFromOpenMeteo(lat, lng);
+        if (elevation !== null && elevation > 0) {
+            console.log(`✅ الارتفاع من Open-Meteo: ${elevation}م`);
+            return elevation;
+        }
+    } catch (error) {
+        console.warn('⚠️ فشل Open-Meteo، جاري الانتقال للطبقة التالية');
+    }
+    
+    // ===== إذا فشل كل شيء، أرجع 0 =====
+    console.warn('⚠️ لم يتم العثور على ارتفاع من جميع المصادر، استخدام 0');
+    return 0;
+}
 
 export default async function handler(req, res) {
     // إعدادات CORS
@@ -6,13 +130,11 @@ export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
-    // معالجة طلب OPTIONS
     if (req.method === 'OPTIONS') {
         res.status(204).end();
         return;
     }
     
-    // استخراج معلمات البحث
     let query = '';
     let limit = 8;
     
@@ -38,8 +160,6 @@ export default async function handler(req, res) {
         console.log(`🔍 جاري البحث عن: "${query}"`);
         
         const encodedQuery = encodeURIComponent(query);
-        
-        // استخدام OpenStreetMap مع User-Agent صحيح
         const url = `https://nominatim.openstreetmap.org/search?q=${encodedQuery}&format=json&limit=${limit}&countrycodes=YE&addressdetails=1&featuretype=city`;
         
         const response = await fetch(url, {
@@ -51,9 +171,7 @@ export default async function handler(req, res) {
         });
         
         if (!response.ok) {
-            // إذا كان 403، جرب بدون countrycodes
             if (response.status === 403) {
-                console.warn('⚠️ 403 Forbidden، جاري المحاولة بدون countrycodes...');
                 const fallbackUrl = `https://nominatim.openstreetmap.org/search?q=${encodedQuery}&format=json&limit=${limit}&addressdetails=1`;
                 const fallbackResponse = await fetch(fallbackUrl, {
                     headers: {
@@ -67,20 +185,37 @@ export default async function handler(req, res) {
                 }
                 
                 const data = await fallbackResponse.json();
-                const cities = data.map((item) => {
+                
+                // معالجة النتائج مع جلب الارتفاع
+                const cities = await Promise.all(data.map(async (item) => {
                     const address = item.address || {};
                     let cityName = address.city || address.town || address.village || item.display_name.split(',')[0] || '';
+                    let governorate = address.state || address.region || address.province || '';
+                    
+                    if (!governorate) {
+                        const parts = item.display_name.split(',');
+                        if (parts.length >= 3) {
+                            governorate = parts[2]?.trim() || '';
+                        }
+                    }
+                    
+                    const lat = parseFloat(item.lat);
+                    const lng = parseFloat(item.lon);
+                    
+                    // جلب الارتفاع من النظام المتعدد الطبقات
+                    const elevation = await getElevation(lat, lng);
+                    
                     return {
                         name: cityName,
-                        lat: parseFloat(item.lat),
-                        lng: parseFloat(item.lon),
-                        elevation: 0,
+                        lat: lat,
+                        lng: lng,
+                        elevation: elevation,
                         district: address.suburb || address.city_district || address.district || address.county || '',
-                        governorate: address.state || address.region || address.province || '',
+                        governorate: governorate,
                         street: address.road || '',
                         display_name: item.display_name || ''
                     };
-                });
+                }));
                 
                 return res.status(200).json({
                     success: true,
@@ -96,7 +231,8 @@ export default async function handler(req, res) {
         
         const data = await response.json();
         
-        const cities = data.map((item) => {
+        // معالجة النتائج مع جلب الارتفاع
+        const cities = await Promise.all(data.map(async (item) => {
             const address = item.address || {};
             
             let cityName = address.city || address.town || address.village || address.municipality || '';
@@ -106,8 +242,6 @@ export default async function handler(req, res) {
             }
             
             let district = address.suburb || address.city_district || address.district || address.county || '';
-            let governorate = address.state || address.region || address.province || '';
-            
             if (!district) {
                 const parts = item.display_name.split(',');
                 if (parts.length >= 2) {
@@ -115,23 +249,47 @@ export default async function handler(req, res) {
                 }
             }
             
+            let governorate = address.state || address.region || address.province || '';
             if (!governorate) {
                 const parts = item.display_name.split(',');
                 if (parts.length >= 3) {
                     governorate = parts[2]?.trim() || '';
                 }
+                if (parts.length >= 4 && !governorate) {
+                    governorate = parts[3]?.trim() || '';
+                }
             }
             
-            if (governorate === 'اليمن' && district) {
+            if (governorate === 'اليمن' && district && district !== 'اليمن') {
                 governorate = district;
                 district = '';
             }
             
+            if (governorate === cityName) {
+                const parts = item.display_name.split(',');
+                if (parts.length >= 3) {
+                    const possibleGov = parts[2]?.trim() || '';
+                    if (possibleGov && possibleGov !== cityName && possibleGov !== 'اليمن') {
+                        governorate = possibleGov;
+                    }
+                }
+            }
+            
+            if (governorate.startsWith('محافظة ')) {
+                governorate = governorate.replace('محافظة ', '');
+            }
+            
+            const lat = parseFloat(item.lat);
+            const lng = parseFloat(item.lon);
+            
+            // ===== جلب الارتفاع من النظام المتعدد الطبقات =====
+            const elevation = await getElevation(lat, lng);
+            
             return {
                 name: cityName,
-                lat: parseFloat(item.lat),
-                lng: parseFloat(item.lon),
-                elevation: 0,
+                lat: lat,
+                lng: lng,
+                elevation: elevation,
                 district: district,
                 governorate: governorate,
                 street: address.road || address.street || '',
@@ -139,7 +297,7 @@ export default async function handler(req, res) {
                 type: item.type || '',
                 class: item.class || ''
             };
-        });
+        }));
         
         console.log(`✅ تم العثور على ${cities.length} نتيجة`);
         
@@ -154,9 +312,8 @@ export default async function handler(req, res) {
     } catch (error) {
         console.error('❌ فشل البحث:', error);
         
-        // محاولة استخدام وكيل مجاني
+        // محاولة استخدام وكيل كملاذ أخير
         try {
-            console.log('🔄 محاولة استخدام وكيل...');
             const proxyUrl = `https://cors-anywhere.herokuapp.com/https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=${limit}&addressdetails=1`;
             
             const proxyResponse = await fetch(proxyUrl, {
@@ -167,15 +324,22 @@ export default async function handler(req, res) {
             
             if (proxyResponse.ok) {
                 const data = await proxyResponse.json();
-                const cities = data.map((item) => ({
-                    name: item.display_name?.split(',')[0] || '',
-                    lat: parseFloat(item.lat),
-                    lng: parseFloat(item.lon),
-                    elevation: 0,
-                    district: '',
-                    governorate: '',
-                    street: '',
-                    display_name: item.display_name || ''
+                const cities = await Promise.all(data.map(async (item) => {
+                    const lat = parseFloat(item.lat);
+                    const lng = parseFloat(item.lon);
+                    const cityName = item.display_name?.split(',')[0] || '';
+                    const elevation = await getElevation(lat, lng);
+                    
+                    return {
+                        name: cityName,
+                        lat: lat,
+                        lng: lng,
+                        elevation: elevation,
+                        district: '',
+                        governorate: item.address?.state || item.address?.region || '',
+                        street: '',
+                        display_name: item.display_name || ''
+                    };
                 }));
                 
                 return res.status(200).json({
@@ -197,4 +361,4 @@ export default async function handler(req, res) {
             message: error.message
         });
     }
-                        }
+                                                      }
