@@ -1,0 +1,12 @@
+{
+    "name": "prayer-api",
+    "version": "1.0.0",
+    "description": "API للبحث عن المدن باستخدام OpenStreetMap",
+    "main": "api/search.js",
+    "scripts": {
+        "start": "vercel dev"
+    },
+    "keywords": ["prayer", "api", "cities", "yemen"],
+    "author": "Your Name",
+    "license": "MIT"
+}
