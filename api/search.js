@@ -1,26 +1,18 @@
 // api/search.js - خادم البحث على Vercel
 
 export default async function handler(req, res) {
-    // ===== إعدادات CORS للسماح لأي موقع باستدعاء الـ API =====
+    // إعدادات CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
-    // ===== معالجة طلب OPTIONS (مطلوب لـ CORS) =====
+    // معالجة طلب OPTIONS
     if (req.method === 'OPTIONS') {
         res.status(204).end();
         return;
     }
     
-    // ===== التحقق من طريقة الطلب =====
-    if (req.method !== 'GET' && req.method !== 'POST') {
-        return res.status(405).json({
-            success: false,
-            error: 'الطريقة غير مدعومة. استخدم GET أو POST'
-        });
-    }
-    
-    // ===== استخراج معلمات البحث =====
+    // استخراج معلمات البحث
     let query = '';
     let limit = 8;
     
@@ -32,7 +24,6 @@ export default async function handler(req, res) {
         limit = parseInt(req.body.limit) || 8;
     }
     
-    // ===== التحقق من صحة المعلمات =====
     if (!query || query.length < 2) {
         return res.status(400).json({
             success: false,
@@ -41,48 +32,82 @@ export default async function handler(req, res) {
         });
     }
     
-    // تحديد الحد الأقصى للنتائج
     if (limit > 20) limit = 20;
     
     try {
-        console.log(`🔍 جاري البحث عن: "${query}" (الحد: ${limit})`);
+        console.log(`🔍 جاري البحث عن: "${query}"`);
         
-        // ===== ترميز النص للبحث =====
         const encodedQuery = encodeURIComponent(query);
         
-        // ===== البحث من OpenStreetMap Nominatim API =====
+        // استخدام OpenStreetMap مع User-Agent صحيح
         const url = `https://nominatim.openstreetmap.org/search?q=${encodedQuery}&format=json&limit=${limit}&countrycodes=YE&addressdetails=1&featuretype=city`;
         
         const response = await fetch(url, {
             headers: {
-                'User-Agent': 'PrayerTimesApp/1.0 (contact@example.com)'
+                'User-Agent': 'PrayerTimesApp/1.0 (https://prayerapi-xi.vercel.app)',
+                'Accept': 'application/json',
+                'Referer': 'https://prayerapi-xi.vercel.app'
             }
         });
         
         if (!response.ok) {
+            // إذا كان 403، جرب بدون countrycodes
+            if (response.status === 403) {
+                console.warn('⚠️ 403 Forbidden، جاري المحاولة بدون countrycodes...');
+                const fallbackUrl = `https://nominatim.openstreetmap.org/search?q=${encodedQuery}&format=json&limit=${limit}&addressdetails=1`;
+                const fallbackResponse = await fetch(fallbackUrl, {
+                    headers: {
+                        'User-Agent': 'PrayerTimesApp/1.0 (https://prayerapi-xi.vercel.app)',
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                if (!fallbackResponse.ok) {
+                    throw new Error(`HTTP ${fallbackResponse.status}: ${fallbackResponse.statusText}`);
+                }
+                
+                const data = await fallbackResponse.json();
+                const cities = data.map((item) => {
+                    const address = item.address || {};
+                    let cityName = address.city || address.town || address.village || item.display_name.split(',')[0] || '';
+                    return {
+                        name: cityName,
+                        lat: parseFloat(item.lat),
+                        lng: parseFloat(item.lon),
+                        elevation: 0,
+                        district: address.suburb || address.city_district || address.district || address.county || '',
+                        governorate: address.state || address.region || address.province || '',
+                        street: address.road || '',
+                        display_name: item.display_name || ''
+                    };
+                });
+                
+                return res.status(200).json({
+                    success: true,
+                    cities: cities,
+                    total: cities.length,
+                    query: query,
+                    limit: limit
+                });
+            }
+            
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
         const data = await response.json();
         
-        // ===== تحويل النتائج إلى الصيغة المطلوبة =====
         const cities = data.map((item) => {
             const address = item.address || {};
             
-            // استخراج اسم المدينة
             let cityName = address.city || address.town || address.village || address.municipality || '';
             if (!cityName) {
                 const parts = item.display_name.split(',');
                 cityName = parts[0]?.trim() || '';
             }
             
-            // استخراج district (المديرية/المنطقة)
             let district = address.suburb || address.city_district || address.district || address.county || '';
-            
-            // استخراج governorate (المحافظة)
             let governorate = address.state || address.region || address.province || '';
             
-            // إذا لم يتم العثور على district، حاول استخراجه من display_name
             if (!district) {
                 const parts = item.display_name.split(',');
                 if (parts.length >= 2) {
@@ -90,7 +115,6 @@ export default async function handler(req, res) {
                 }
             }
             
-            // إذا لم يتم العثور على governorate، حاول استخراجه من display_name
             if (!governorate) {
                 const parts = item.display_name.split(',');
                 if (parts.length >= 3) {
@@ -98,7 +122,6 @@ export default async function handler(req, res) {
                 }
             }
             
-            // تنظيف البيانات
             if (governorate === 'اليمن' && district) {
                 governorate = district;
                 district = '';
@@ -120,7 +143,6 @@ export default async function handler(req, res) {
         
         console.log(`✅ تم العثور على ${cities.length} نتيجة`);
         
-        // ===== الرد بالنتائج =====
         return res.status(200).json({
             success: true,
             cities: cities,
@@ -132,6 +154,42 @@ export default async function handler(req, res) {
     } catch (error) {
         console.error('❌ فشل البحث:', error);
         
+        // محاولة استخدام وكيل مجاني
+        try {
+            console.log('🔄 محاولة استخدام وكيل...');
+            const proxyUrl = `https://cors-anywhere.herokuapp.com/https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=${limit}&addressdetails=1`;
+            
+            const proxyResponse = await fetch(proxyUrl, {
+                headers: {
+                    'User-Agent': 'PrayerTimesApp/1.0'
+                }
+            });
+            
+            if (proxyResponse.ok) {
+                const data = await proxyResponse.json();
+                const cities = data.map((item) => ({
+                    name: item.display_name?.split(',')[0] || '',
+                    lat: parseFloat(item.lat),
+                    lng: parseFloat(item.lon),
+                    elevation: 0,
+                    district: '',
+                    governorate: '',
+                    street: '',
+                    display_name: item.display_name || ''
+                }));
+                
+                return res.status(200).json({
+                    success: true,
+                    cities: cities,
+                    total: cities.length,
+                    query: query,
+                    limit: limit
+                });
+            }
+        } catch (proxyError) {
+            console.error('❌ فشل الوكيل:', proxyError);
+        }
+        
         return res.status(500).json({
             success: false,
             error: 'حدث خطأ أثناء البحث',
@@ -139,4 +197,4 @@ export default async function handler(req, res) {
             message: error.message
         });
     }
-        }
+                        }
